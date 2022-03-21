@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/status"
 	empty "google.golang.org/protobuf/types/known/emptypb"
 	"gopkg.in/yaml.v3"
-	corev1 "k8s.io/api/core/v1"
+	core "k8s.io/api/core/v1"
 
 	"github.com/datawire/dlib/dlog"
 	rpc "github.com/telepresenceio/telepresence/rpc/v2/manager"
@@ -300,6 +300,12 @@ func (m *Manager) WatchIntercepts(session *rpc.SessionInfo, stream rpc.Manager_W
 			return nil
 		}
 	}
+}
+
+func (m *Manager) PrepareIntercept(ctx context.Context, request *rpc.CreateInterceptRequest) (*rpc.PreparedIntercept, error) {
+	ctx = managerutil.WithSessionInfo(ctx, request.Session)
+	dlog.Debugf(ctx, "PrepareIntercept called")
+	return m.state.PrepareIntercept(ctx, request)
 }
 
 // CreateIntercept lets a client create an intercept.
@@ -633,14 +639,14 @@ func (m *Manager) GetLogs(ctx context.Context, request *rpc.GetLogsRequest) (*rp
 	// instead return the error in the map, instead of the log, so that:
 	// - one failure doesn't prevent us from getting logs from other pods
 	// - it is easy to figure out why gettings logs for a given pod failed
-	getPodLogs := func(pods []*corev1.Pod, container string) {
+	getPodLogs := func(pods []*core.Pod, container string) {
 		wg := sync.WaitGroup{}
 		logWriteMutex := &sync.Mutex{}
 		wg.Add(len(pods))
 		for _, pod := range pods {
-			go func(pod *corev1.Pod) {
+			go func(pod *core.Pod) {
 				defer wg.Done()
-				plo := &corev1.PodLogOptions{
+				plo := &core.PodLogOptions{
 					Container: container,
 				}
 				// Since the same named workload could exist in multiple namespaces

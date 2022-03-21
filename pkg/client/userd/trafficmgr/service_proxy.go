@@ -176,6 +176,9 @@ func (p *mgrProxy) WatchIntercepts(arg *managerrpc.SessionInfo, srv managerrpc.M
 	}
 }
 
+func (p *mgrProxy) PrepareIntercept(_ context.Context, _ *managerrpc.CreateInterceptRequest) (*managerrpc.PreparedIntercept, error) {
+	return nil, errors.New("must call connector.CanIntercept instead of manager.CreateIntercept")
+}
 func (p *mgrProxy) CreateIntercept(_ context.Context, _ *managerrpc.CreateInterceptRequest) (*managerrpc.InterceptInfo, error) {
 	return nil, errors.New("must call connector.CreateIntercept instead of manager.CreateIntercept")
 }

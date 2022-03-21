@@ -33,12 +33,12 @@ import (
 )
 
 type interceptArgs struct {
-	name        string // Args[0] || `${Args[0]}-${--namespace}` // which depends on a combinationof --workload and --namespace
-	agentName   string // --workload || Args[0] // only valid if !localOnly
-	namespace   string // --namespace
-	port        string // --port // only valid if !localOnly
-	serviceName string // --service // only valid if !localOnly
-	localOnly   bool   // --local-only
+	name        string   // Args[0] || `${Args[0]}-${--namespace}` // which depends on a combinationof --workload and --namespace
+	agentName   string   // --workload || Args[0] // only valid if !localOnly
+	namespace   string   // --namespace
+	ports       []string // --port // only valid if !localOnly
+	serviceName string   // --service // only valid if !localOnly
+	localOnly   bool     // --local-only
 
 	previewEnabled bool                 // --preview-url // only valid if !localOnly
 	previewSpec    *manager.PreviewSpec // --preview-url-* // only valid if !localOnly
@@ -95,11 +95,10 @@ type interceptState struct {
 
 	// set later ///////////////////////////////////////////////////////////
 
-	env        map[string]string
-	mountPoint string // if non-empty, this the final mount point of a successful mount
-	localPort  uint16 // the parsed <local port>
-
-	dockerPort uint16
+	env         map[string]string
+	mountPoint  string   // if non-empty, this the final mount point of a successful mount
+	localPorts  []uint16 // the parsed <local port>
+	dockerPorts []uint16
 }
 
 func interceptCommand(ctx context.Context) *cobra.Command {
@@ -115,7 +114,7 @@ func interceptCommand(ctx context.Context) *cobra.Command {
 	flags := cmd.Flags()
 
 	flags.StringVarP(&args.agentName, "workload", "w", "", "Name of workload (Deployment, ReplicaSet) to intercept, if different from <name>")
-	flags.StringVarP(&args.port, "port", "p", strconv.Itoa(client.GetConfig(ctx).Intercept.DefaultPort), ``+
+	flags.StringSliceVarP(&args.ports, "port", "p", []string{strconv.Itoa(client.GetConfig(ctx).Intercept.DefaultPort)}, ``+
 		`Local port to forward to. If intercepting a service with multiple ports, `+
 		`use <local port>:<svcPortIdentifier>, where the identifier is the port name or port number. `+
 		`With --docker-run, use <local port>:<container port> or <local port>:<container port>:<svcPortIdentifier>.`,
@@ -367,6 +366,55 @@ func checkMountCapability(ctx context.Context) error {
 	return nil
 }
 
+func parseNumericPort(portStr string) (uint16, error) {
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return 0, errcat.User.Newf("port numbers must be a valid, positive int, you gave: %q", portStr)
+	}
+	return uint16(port), nil
+}
+
+// parsePort parses portSpec based on how it's formatted
+func parsePort(portSpec string, dockerRun bool) (local uint16, docker uint16, svcPortId string, err error) {
+	portMapping := strings.Split(portSpec, ":")
+	portError := func() (uint16, uint16, string, error) {
+		if dockerRun {
+			return 0, 0, "", errcat.User.New("port must be of the format --port <local-port>:<container-port>[:<svcPortIdentifier>]")
+		}
+		return 0, 0, "", errcat.User.New("port must be of the format --port <local-port>[:<svcPortIdentifier>]")
+	}
+
+	if local, err = parseNumericPort(portMapping[0]); err != nil {
+		return portError()
+	}
+
+	switch len(portMapping) {
+	case 1:
+	case 2:
+		if dockerRun {
+			if docker, err = parseNumericPort(portMapping[1]); err != nil {
+				return portError()
+			}
+		} else {
+			svcPortId = portMapping[1]
+		}
+	case 3:
+		if !dockerRun {
+			return portError()
+		}
+		if docker, err = parseNumericPort(portMapping[1]); err != nil {
+			return portError()
+		}
+		svcPortId = portMapping[2]
+	default:
+		return portError()
+	}
+	if dockerRun && docker == 0 {
+		docker = local
+	}
+	return local, docker, svcPortId, nil
+}
+
 func (is *interceptState) createRequest(ctx context.Context) (*connector.CreateInterceptRequest, error) {
 	spec := &manager.InterceptSpec{
 		Name:      is.args.name,
@@ -387,57 +435,31 @@ func (is *interceptState) createRequest(ctx context.Context) (*connector.CreateI
 	spec.TargetHost = "127.0.0.1"
 
 	// Parse port into spec based on how it's formatted
-	portMapping := strings.Split(is.args.port, ":")
-	portError := func() error {
-		if is.args.dockerRun {
-			return errcat.User.New("ports must be of the format --ports <local-port>:<container-port>[:<svcPortIdentifier>]")
-		}
-		return errcat.User.New("ports must be of the format --ports <local-port>[:<svcPortIdentifier>]")
+	portSpecs := is.args.ports
+	is.localPorts = make([]uint16, len(portSpecs))
+	spec.TargetPorts = make([]int32, len(portSpecs))
+	spec.ServicePortIdentifiers = make([]string, len(portSpecs))
+	if is.args.dockerRun {
+		is.dockerPorts = make([]uint16, len(portSpecs))
 	}
-
-	parsePort := func(portStr string) (uint16, error) {
-		port, err := strconv.ParseUint(portStr, 10, 16)
+	for i, portSpec := range portSpecs {
+		local, docker, svcPortId, err := parsePort(portSpec, is.args.dockerRun)
 		if err != nil {
-			return 0, errcat.User.Newf("port numbers must be a valid, positive int, you gave: %q", is.args.port)
-		}
-		return uint16(port), nil
-	}
-
-	port, err := parsePort(portMapping[0])
-	if err != nil {
-		return nil, err
-	}
-	is.localPort = port
-	spec.TargetPort = int32(port)
-
-	switch len(portMapping) {
-	case 1:
-	case 2:
-		if port, err = parsePort(portMapping[1]); err == nil && is.args.dockerRun {
-			is.dockerPort = port
-		} else {
-			spec.ServicePortIdentifier = portMapping[1]
-		}
-	case 3:
-		if !is.args.dockerRun {
-			return nil, portError()
-		}
-		if port, err = parsePort(portMapping[1]); err != nil {
 			return nil, err
 		}
-		is.dockerPort = port
-		spec.ServicePortIdentifier = portMapping[2]
-	default:
-		return nil, portError()
+		is.localPorts[i] = local
+		spec.TargetPorts[i] = int32(local)
+		spec.ServicePortIdentifiers[i] = svcPortId
+		if is.args.dockerRun {
+			is.dockerPorts[i] = docker
+		}
 	}
-
-	if is.args.dockerRun && is.dockerPort == 0 {
-		is.dockerPort = is.localPort
-	}
+	// For backward compatibility with traffic-managers older than 2.6.0, we also set these:
+	spec.TargetPort = spec.TargetPorts[0]
+	spec.ServicePortIdentifier = spec.ServicePortIdentifiers[0]
 
 	doMount := false
-	err = checkMountCapability(ctx)
-	if err == nil {
+	if err := checkMountCapability(ctx); err == nil {
 		if ir.MountPoint, doMount, err = is.getMountPoint(); err != nil {
 			return nil, err
 		}
@@ -451,7 +473,7 @@ func (is *interceptState) createRequest(ctx context.Context) (*connector.CreateI
 	}
 
 	for _, toPod := range is.args.toPod {
-		port, err := parsePort(toPod)
+		port, err := parseNumericPort(toPod)
 		if err != nil {
 			return nil, errcat.User.Newf("Unable to parse port %s: %w", toPod, err)
 		}
@@ -467,12 +489,11 @@ func (is *interceptState) createRequest(ctx context.Context) (*connector.CreateI
 		}
 	}
 
-	spec.Mechanism, err = is.args.extState.Mechanism()
-	if err != nil {
+	var err error
+	if spec.Mechanism, err = is.args.extState.Mechanism(); err != nil {
 		return nil, err
 	}
-	spec.MechanismArgs, err = is.args.extState.MechanismArgs()
-	if err != nil {
+	if spec.MechanismArgs, err = is.args.extState.MechanismArgs(); err != nil {
 		return nil, err
 	}
 	return ir, nil
@@ -763,11 +784,13 @@ func (is *interceptState) runInDocker(ctx context.Context, cmd safeCobraCommand,
 		return false
 	}
 	if !hasArg("--name") {
-		ourArgs = append(ourArgs, "--name", fmt.Sprintf("intercept-%s-%d", is.args.name, is.localPort))
+		ourArgs = append(ourArgs, "--name", fmt.Sprintf("intercept-%s-%d", is.args.name, is.localPorts))
 	}
 
-	if is.dockerPort != 0 {
-		ourArgs = append(ourArgs, "-p", fmt.Sprintf("%d:%d", is.localPort, is.dockerPort))
+	for _, dockerPort := range is.dockerPorts {
+		if dockerPort != 0 {
+			ourArgs = append(ourArgs, "-p", fmt.Sprintf("%d:%d", is.localPorts, dockerPort))
+		}
 	}
 
 	dockerMount := ""
