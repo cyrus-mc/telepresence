@@ -121,18 +121,30 @@ func (c *configWatcher) Run(ctx context.Context) error {
 			return nil
 		case e := <-delCh:
 			dlog.Infof(ctx, "del %s.%s: %s", e.name, e.namespace, e.value)
-			_, wl, err := e.workload(ctx)
+			ac, wl, err := e.workload(ctx)
 			if err != nil {
 				dlog.Error(ctx, err)
+				continue
+			}
+			if ac.Create {
+				// Deleted before it was generated, just ignore
 				continue
 			}
 			triggerRollout(ctx, wl)
 		case e := <-addCh:
 			dlog.Infof(ctx, "add %s.%s: %s", e.name, e.namespace, e.value)
-			_, wl, err := e.workload(ctx)
+			ac, wl, err := e.workload(ctx)
 			if err != nil {
 				dlog.Error(ctx, err)
 				continue
+			}
+			if ac.Create {
+				if ac, err = Generate(ctx, wl, wl.GetPodTemplate()); err != nil {
+					dlog.Error(ctx, err)
+				} else if err = c.Store(ctx, ac.Namespace, ac, false); err != nil {
+					dlog.Error(ctx, err)
+				}
+				continue // Calling Store() will generate a new event, so we skip rollout here
 			}
 			triggerRollout(ctx, wl)
 		}
