@@ -500,6 +500,8 @@ func (tm *TrafficManager) AddIntercept(c context.Context, ir *rpc.CreateIntercep
 	tm.activeInterceptsWaiters.Store(spec.Name, waitCh)
 	defer tm.activeInterceptsWaiters.Delete(spec.Name)
 
+	spec.ServicePortIdentifiers = []string{spec.ServicePortIdentifier}
+	spec.TargetPorts = []int32{spec.TargetPort}
 	ii, err := tm.managerClient.CreateIntercept(c, &manager.CreateInterceptRequest{
 		Session:       tm.session(),
 		InterceptSpec: spec,
@@ -566,7 +568,7 @@ func (tm *TrafficManager) workerPortForwardIntercept(ctx context.Context, pf por
 		IP:   net.IPv4(127, 0, 0, 1),
 		Port: int(pf.Port),
 	}
-	f := forwarder.NewForwarder(&addr, pf.PodIP, pf.Port)
+	f := forwarder.NewForwarder(&addr, pf.PodIP, uint16(pf.Port))
 	err := f.Serve(ctx)
 	if err != nil && ctx.Err() == nil {
 		dlog.Errorf(ctx, "port-forwarder failed with %v", err)

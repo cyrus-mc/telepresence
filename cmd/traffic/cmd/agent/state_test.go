@@ -12,12 +12,13 @@ import (
 	rpc "github.com/telepresenceio/telepresence/rpc/v2/manager"
 	"github.com/telepresenceio/telepresence/v2/cmd/traffic/cmd/agent"
 	"github.com/telepresenceio/telepresence/v2/pkg/forwarder"
+	agent2 "github.com/telepresenceio/telepresence/v2/pkg/install/agent"
 )
 
 const (
-	appHost       = "appHost"
-	appPort int32 = 5000
-	mgrHost       = "managerHost"
+	appHost        = "appHost"
+	appPort uint16 = 5000
+	mgrHost        = "managerHost"
 )
 
 func makeFS(t *testing.T) (*forwarder.Forwarder, agent.State) {
@@ -37,7 +38,19 @@ func makeFS(t *testing.T) (*forwarder.Forwarder, agent.State) {
 	}, 1*time.Second, 10*time.Millisecond)
 
 	s := agent.NewState(mgrHost, "default", "xyz", 0)
-	s.AddIntercept(f, "/tmp", nil)
+	s.AddIntercept([]*forwarder.Forwarder{f}, &agent2.Container{
+		Name: "the-container",
+		Intercepts: []*agent2.Intercept{{
+			ContainerPort:   appPort,
+			ServicePortName: "http",
+			ServicePort:     80,
+			Headless:        false,
+			Protocol:        "tcp",
+			AgentPort:       9000,
+		}},
+		EnvPrefix:  "A_",
+		MountPoint: "/tmp",
+	}, map[string]string{})
 
 	return f, s
 }
@@ -49,7 +62,7 @@ func TestState_HandleIntercepts(t *testing.T) {
 
 	var (
 		host    string
-		port    int32
+		port    uint16
 		cepts   []*rpc.InterceptInfo
 		reviews []*rpc.ReviewInterceptRequest
 	)
@@ -71,21 +84,25 @@ func TestState_HandleIntercepts(t *testing.T) {
 	cepts = []*rpc.InterceptInfo{
 		{
 			Spec: &rpc.InterceptSpec{
-				Name:      "cept1Name",
-				Client:    "user@host1",
-				Agent:     "agentName",
-				Mechanism: "tcp",
-				Namespace: "default",
+				Name:                   "cept1Name",
+				Client:                 "user@host1",
+				Agent:                  "agentName",
+				Mechanism:              "tcp",
+				Namespace:              "default",
+				ServicePortIdentifiers: []string{"http"},
+				TargetPorts:            []int32{8080},
 			},
 			Id: "intercept-01",
 		},
 		{
 			Spec: &rpc.InterceptSpec{
-				Name:      "cept2Name",
-				Client:    "user@host2",
-				Agent:     "agentName",
-				Mechanism: "tcp",
-				Namespace: "default",
+				Name:                   "cept2Name",
+				Client:                 "user@host2",
+				Agent:                  "agentName",
+				Mechanism:              "tcp",
+				Namespace:              "default",
+				ServicePortIdentifiers: []string{"http"},
+				TargetPorts:            []int32{8080},
 			},
 			Id: "intercept-02",
 		},

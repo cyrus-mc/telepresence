@@ -24,10 +24,11 @@ type Forwarder struct {
 	lCancel    context.CancelFunc
 	listenAddr *net.TCPAddr
 
-	tCtx       context.Context
-	tCancel    context.CancelFunc
-	targetHost string
-	targetPort int32
+	tCtx          context.Context
+	tCancel       context.CancelFunc
+	targetHost    string
+	targetPort    uint16
+	interceptPort uint16
 
 	manager     manager.ManagerClient
 	sessionInfo *manager.SessionInfo
@@ -36,7 +37,7 @@ type Forwarder struct {
 	mgrVersion semver.Version
 }
 
-func NewForwarder(listen *net.TCPAddr, targetHost string, targetPort int32) *Forwarder {
+func NewForwarder(listen *net.TCPAddr, targetHost string, targetPort uint16) *Forwarder {
 	return &Forwarder{
 		listenAddr: listen,
 		targetHost: targetHost,
@@ -114,7 +115,7 @@ func (f *Forwarder) Close() error {
 	return nil
 }
 
-func (f *Forwarder) Target() (string, int32) {
+func (f *Forwarder) Target() (string, uint16) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -139,13 +140,13 @@ func (f *Forwarder) Intercepting() bool {
 	return intercepting
 }
 
-func (f *Forwarder) SetIntercepting(intercept *manager.InterceptInfo) {
+func (f *Forwarder) SetIntercepting(intercept *manager.InterceptInfo, interceptPort uint16) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	iceptInfo := func(ii *manager.InterceptInfo) string {
 		is := ii.Spec
-		return fmt.Sprintf("'%s' (%s:%d)", is.Name, is.Client, is.TargetPort)
+		return fmt.Sprintf("'%s' (%s:%d)", is.Name, is.Client, interceptPort)
 	}
 	if intercept == nil {
 		if f.intercept == nil {
@@ -169,6 +170,7 @@ func (f *Forwarder) SetIntercepting(intercept *manager.InterceptInfo) {
 	// Set up new target and lifetime
 	f.tCtx, f.tCancel = context.WithCancel(f.lCtx)
 	f.intercept = intercept
+	f.interceptPort = interceptPort
 }
 
 func (f *Forwarder) forwardConn(clientConn *net.TCPConn) error {
@@ -177,9 +179,10 @@ func (f *Forwarder) forwardConn(clientConn *net.TCPConn) error {
 	targetHost := f.targetHost
 	targetPort := f.targetPort
 	intercept := f.intercept
+	interceptPort := f.interceptPort
 	f.mu.Unlock()
 	if intercept != nil {
-		return f.interceptConn(ctx, clientConn, intercept)
+		return f.interceptConn(ctx, clientConn, intercept, interceptPort)
 	}
 
 	targetAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", targetHost, targetPort))
@@ -230,7 +233,7 @@ func (f *Forwarder) forwardConn(clientConn *net.TCPConn) error {
 	return nil
 }
 
-func (f *Forwarder) interceptConn(ctx context.Context, conn net.Conn, iCept *manager.InterceptInfo) error {
+func (f *Forwarder) interceptConn(ctx context.Context, conn net.Conn, iCept *manager.InterceptInfo, interceptPort uint16) error {
 	dlog.Infof(ctx, "Accept got connection from %s", conn.RemoteAddr())
 
 	srcIp, srcPort, err := iputil.SplitToIPPort(conn.RemoteAddr())
@@ -240,7 +243,7 @@ func (f *Forwarder) interceptConn(ctx context.Context, conn net.Conn, iCept *man
 
 	spec := iCept.Spec
 	destIp := iputil.Parse(spec.TargetHost)
-	id := tunnel.NewConnID(tunnel.IPProto(conn.RemoteAddr().Network()), srcIp, destIp, srcPort, uint16(spec.TargetPort))
+	id := tunnel.NewConnID(tunnel.IPProto(conn.RemoteAddr().Network()), srcIp, destIp, srcPort, interceptPort)
 
 	ms, err := f.manager.Tunnel(ctx)
 	if err != nil {

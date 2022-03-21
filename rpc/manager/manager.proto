@@ -88,10 +88,16 @@ message InterceptSpec {
   repeated string mechanism_args = 9;
 
   string target_host = 6;
-  int32 target_port = 7;
 
-  // Identifier for the service port: either the name or port number
-  string service_port_identifier = 10;
+  // The ports on the workstation that the intercept redirects to. The
+  // size of this array will always be equal to the size of the
+  // service_port_identifiers array
+  repeated int32 target_ports = 18;
+
+  // Identifier for the service ports: each identifier is either the
+  // name or port number of the intercepted service The size of this
+  // array will always be equal to the size of the target_ports array
+  repeated string service_port_identifiers = 19;
 
   // .uid.metadata of service associated with intercept
   string service_uid = 12;
@@ -99,7 +105,8 @@ message InterceptSpec {
   // name of the aforementioned service
   string service_name = 14;
 
-  // extra ports that will be forwarded to the intercepting client
+  // Extra ports that will be forwarded from the intercepting client's localhost
+  // to the intercepted pod.
   repeated int32 extra_ports = 15;
 
   // The delay imposed by a call roundtrip between the traffic-agent and
@@ -110,7 +117,17 @@ message InterceptSpec {
   // The dial timeout to use when a dial is made on the intercepting workstation.
   int64 dial_timeout = 17;
 
-  reserved 11;
+  // The port on the workstation that the intercept is redirected to
+  // Deprecated but still in use if the manager version is < 2.6.0
+  int32 target_port = 7;
+
+  // Identifier for the service port: either the name or port number
+  // Deprecated but still in use if the manager version is < 2.6.0
+  string service_port_identifier = 10;
+
+  // Used to be mount_point and only utilized when passing the spec between
+  // the user daemon and the CLI. It's now moved to InterceptInfo
+  string reserved = 11;
 }
 
 enum InterceptDispositionType {
