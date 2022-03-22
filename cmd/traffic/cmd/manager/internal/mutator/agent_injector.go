@@ -128,6 +128,11 @@ func (a *agentInjector) uninstall(ctx context.Context) {
 	a.agentConfigs.DeleteMapsAndRolloutAll(ctx)
 }
 
+// upgradeLegacy
+func (a *agentInjector) upgradeLegacy(ctx context.Context) {
+	a.agentConfigs.UninstallV25(ctx)
+}
+
 func needInitContainer(config *agent.Config) bool {
 	for _, cc := range config.Containers {
 		for _, ic := range cc.Intercepts {

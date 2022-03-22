@@ -65,6 +65,7 @@ rules:
   - list
   - get
   - patch
+  - update
 # Needed for the `gather-logs` command to work on components in the kubernetes
 # cluster (traffic-manager + traffic-agents)
 - apiGroups:
